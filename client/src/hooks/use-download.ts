@@ -9,6 +9,8 @@ interface DownloadProgress {
   currentStep: string;
 }
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+
 export function useDownload() {
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
@@ -17,7 +19,7 @@ export function useDownload() {
     setIsProcessing(true);
 
     try {
-      const downloadUrl = `/api/download?url=${encodeURIComponent(url)}&quality=${encodeURIComponent(quality)}`;
+      const downloadUrl = `${API_BASE_URL}/api/download?url=${encodeURIComponent(url)}&quality=${encodeURIComponent(quality)}`;
       
       const link = document.createElement('a');
       link.href = downloadUrl;
