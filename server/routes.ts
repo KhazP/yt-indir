@@ -91,10 +91,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const videoInfo = videoInfoResponse as VideoInfo; // Cast to VideoInfo after check
 
-      const videoTitle = videoInfo.title.replace(/[^a-zA-Z0-9\\s_\\-\\[\\]\\(\\)]/g, '_') || 'youtube_video';
-      const filename = `${videoTitle}.${videoInfo.ext || 'mp4'}`;
+      // Sanitize video title for filename
+      let asciiFilename = videoInfo.title || 'youtube_video';
+      // Replace non-ASCII and other problematic characters with underscore for basic filename
+      asciiFilename = asciiFilename.replace(/[^a-zA-Z0-9_\-\.]/g, '_').replace(/__+/g, '_').replace(/^_+|_+$/g, '');
+      if (!asciiFilename) asciiFilename = 'youtube_video';
+      asciiFilename = `${asciiFilename}.${videoInfo.ext || 'mp4'}`;
 
-      res.setHeader('Content-Disposition', `attachment; filename=\"${filename}\"`);
+      // For filename*, use the original (or minimally sanitized) title for better readability if possible,
+      // but ensure it's properly URI encoded. Here we'll use the same aggressively sanitized title
+      // to build the base for encoding to keep it simpler, but one could use a less sanitized version for filename*.
+      let utf8Filename = videoInfo.title || 'youtube_video';
+      utf8Filename = utf8Filename.replace(/[\/\\:\*\?\"<>\|]/g, '_'); // Minimal sanitization for problematic path chars
+      utf8Filename = `${utf8Filename}.${videoInfo.ext || 'mp4'}`;
+
+      res.setHeader('Content-Disposition', 
+        `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(utf8Filename)}`
+      );
       const mimeType = videoInfo.ext === 'webm' ? 'video/webm' : 'video/mp4';
       res.setHeader('Content-Type', mimeType);
 
@@ -105,7 +118,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (fileSize) {
         res.setHeader('Content-Length', fileSize.toString());
       } else {
-        console.warn(`Content-Length not available for ${filename}. Client might not show download progress accurately.`);
+        console.warn(`Content-Length not available for ${asciiFilename}. Client might not show download progress accurately.`);
       }
       
       // Prepare arguments for ytdlp.stream
@@ -125,11 +138,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const ytdlpReadableStream = ytdlp.stream(url, streamOptions);
       
       if (ytdlpReadableStream && typeof ytdlpReadableStream.pipeAsync === 'function') {
-        console.log(`Streaming video: ${filename} to client.`);
+        console.log(`Streaming video: ${asciiFilename} to client.`);
         // Pipe the stream to the response.
         // pipeAsync handles piping and promise resolution/rejection.
         await ytdlpReadableStream.pipeAsync(res);
-        console.log(`Finished streaming ${filename}.`);
+        console.log(`Finished streaming ${asciiFilename}.`);
       } else {
         console.error('Failed to get a ytdlp.stream object with pipeAsync method.');
         if (!res.headersSent) {
