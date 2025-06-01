@@ -1,8 +1,10 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertDownloadSchema, youtubeUrlSchema, qualitySchema } from "@shared/schema";
 import { z } from "zod";
+import { YtDlp, type VideoInfo } from 'ytdlp-nodejs';
+import stream from 'stream';
 
 // Helper function to parse ISO 8601 duration
 function parseDuration(duration: string): string {
@@ -30,52 +32,135 @@ function formatViewCount(views: number): string {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  const ytdlp = new YtDlp();
+
   // YouTube download endpoint
-  app.post("/api/download", async (req, res) => {
+  app.get("/api/download", async (req: Request, res: Response) => {
     try {
-      // Validate request body
-      const { url, quality } = insertDownloadSchema.parse(req.body);
-      
-      // Additional URL validation
-      youtubeUrlSchema.parse({ url });
-      qualitySchema.parse(quality);
+      const url = req.query.url as string;
+      const quality = req.query.quality as string;
 
-      // Create download record
-      const download = await storage.createDownload({ url, quality });
-
-      // Simulate processing delay
-      setTimeout(async () => {
-        await storage.updateDownload(download.id, {
-          status: "completed",
-          progress: 100,
-          filename: `youtube_video_${quality}_${download.id}.mp4`
-        });
-      }, 5000);
-
-      res.json({
-        id: download.id,
-        url: download.url,
-        quality: download.quality,
-        status: download.status,
-        message: "Download started successfully"
-      });
-
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({
-          message: "Invalid input",
-          errors: error.errors
-        });
+      if (!url) {
+        return res.status(400).json({ message: "URL parameter is required" });
+      }
+      if (!quality) {
+        // Quality parameter is kept for now, but ytdlp-nodejs might use its own format selection.
+        // We can let yt-dlp decide the best format or pass specific format codes later.
+        console.log("Quality parameter provided, but yt-dlp will determine best format for now.");
       }
 
-      res.status(500).json({
-        message: "Internal server error"
+      youtubeUrlSchema.parse({ url });
+
+      console.log(`Attempting to download: ${url}`);
+
+      const videoInfoResponse = await ytdlp.getInfoAsync(url);
+
+      // Type guard for VideoInfo
+      if (videoInfoResponse._type !== 'video') {
+        console.error("Requested URL is a playlist or not a single video.");
+        return res.status(400).json({ message: "Downloading playlists is not supported. Please provide a single video URL." });
+      }
+      
+      const videoInfo = videoInfoResponse as VideoInfo; // Cast to VideoInfo after check
+
+      const videoTitle = videoInfo.title.replace(/[^a-zA-Z0-9\\s_\\-\\[\\]\\(\\)]/g, '_') || 'youtube_video';
+      const filename = `${videoTitle}.${videoInfo.ext || 'mp4'}`;
+
+      res.setHeader('Content-Disposition', `attachment; filename=\"${filename}\"`);
+      const mimeType = videoInfo.ext === 'webm' ? 'video/webm' : 'video/mp4';
+      res.setHeader('Content-Type', mimeType);
+
+      let fileSize = videoInfo.filesize || videoInfo.filesize_approx;
+      // yt-dlp sometimes returns format specific filesize in videoInfo.formats
+      // For simplicity, we'll try to use the top-level filesize if available.
+      // If precise quality selection is implemented, we'd pick the filesize from the selected format.
+      if (fileSize) {
+        res.setHeader('Content-Length', fileSize.toString());
+      } else {
+        console.warn(`Content-Length not available for ${filename}. Client might not show download progress accurately.`);
+      }
+      
+      // Prepare arguments for ytdlp.stream
+      // The 'quality' from user (e.g., "720p") needs to be translated into yt-dlp format selection.
+      // Example: -f "bestvideo[height<=?720][ext=mp4]+bestaudio[ext=m4a]/best[height<=?720][ext=mp4]"
+      // For now, let's try a simple approach, or let yt-dlp pick 'best'.
+      // We can enhance format selection later. A specific format string for yt-dlp:
+      let formatString = `best[ext=mp4][height<=?${quality.replace('p','')}]/best[ext=webm][height<=?${quality.replace('p','')}]/best`;
+      if (quality.toLowerCase() === 'best') {
+          formatString = 'best';
+      }
+
+
+      console.log(`Requesting stream with format: ${formatString}`);
+      const ytdlpReadableStream = ytdlp.stream(url, {
+        format: formatString, 
+        // onProgress: (progress) => {
+        //   // This progress is from yt-dlp itself, not bytes transferred.
+        //   // For client-side progress, Content-Length and chunked streaming are more standard.
+        //   console.log('yt-dlp progress:', progress.percent, progress.totalSize);
+        // }
       });
+      
+      if (ytdlpReadableStream && typeof ytdlpReadableStream.pipeAsync === 'function') {
+        console.log(`Streaming video: ${filename} to client.`);
+        // Pipe the stream to the response.
+        // pipeAsync handles piping and promise resolution/rejection.
+        await ytdlpReadableStream.pipeAsync(res);
+        console.log(`Finished streaming ${filename}.`);
+      } else {
+        console.error('Failed to get a ytdlp.stream object with pipeAsync method.');
+        if (!res.headersSent) {
+            return res.status(500).json({ message: "Failed to get video stream object" });
+        }
+      }
+
+    } catch (error: any) {
+      console.error("Download processing error:", error);
+      if (!res.headersSent) {
+        let statusCode = 500;
+        let message = "Internal server error during video processing.";
+
+        if (error instanceof z.ZodError) {
+          statusCode = 400;
+          message = "Invalid input";
+          return res.status(statusCode).json({ message, errors: error.errors });
+        }
+        
+        const errorMessage = error.message?.toLowerCase() || '';
+        if (errorMessage.includes("age restricted")) {
+            statusCode = 403;
+            message = "Video is age restricted and cannot be downloaded.";
+        } else if (errorMessage.includes("private video") || errorMessage.includes("video is private")) {
+            statusCode = 403;
+            message = "Video is private and cannot be downloaded.";
+        } else if (errorMessage.includes("unavailable")) {
+            statusCode = 404;
+            message = "Video is unavailable.";
+        } else if (errorMessage.includes("no formats found") || errorMessage.includes("format not available")) {
+            statusCode = 404;
+            message = `Requested quality (${req.query.quality}) not available for this video. Try a different quality.`;
+        }
+         else if (error.stderr && error.stderr.toLowerCase().includes("aria2c")) {
+            statusCode = 500;
+            message = "Error with download accelerator. Please ensure yt-dlp is configured correctly without Aria2c or check Aria2c setup.";
+        }
+
+
+        res.status(statusCode).json({
+          message: message,
+          details: error.message // Include original error message for more context on client/logs if needed
+        });
+      } else {
+        // If headers are already sent, we can't send a JSON error response.
+        // We should ensure the stream is destroyed if it hasn't been.
+        console.error("Error after headers sent, client response might be incomplete.");
+        if (req.socket) req.socket.destroy(); // Forcefully close the connection
+      }
     }
   });
 
   // Get download status
-  app.get("/api/download/:id", async (req, res) => {
+  app.get("/api/download/:id", async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -88,36 +173,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(download);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Internal server error" });
     }
   });
 
-  // Generic download endpoint
-  app.get("/api/file/download", (req, res) => {
-    const filename = "youtube_video.mp4";
-    
-    // Create a simple mock MP4-like content
-    const mockMP4Header = Buffer.from([
-      0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, // MP4 signature
-      0x69, 0x73, 0x6F, 0x6D, 0x00, 0x00, 0x02, 0x00,
-      0x69, 0x73, 0x6F, 0x6D, 0x69, 0x73, 0x6F, 0x32,
-      0x6D, 0x70, 0x34, 0x31, 0x00, 0x00, 0x00, 0x08
-    ]);
-    
-    const content = "Mock YouTube video content - this would be the actual video stream in production.\n";
-    const fullContent = Buffer.concat([mockMP4Header, Buffer.from(content)]);
-    
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Length', fullContent.length);
-    res.setHeader('Cache-Control', 'no-cache');
-    
-    res.send(fullContent);
-  });
-
   // Video info endpoint
-  app.get("/api/video-info", async (req, res) => {
+  app.get("/api/video-info", async (req: Request, res: Response) => {
     try {
       const url = req.query.url as string;
       if (!url) {
@@ -182,7 +244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(videoInfo);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Video info error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -197,7 +259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // URL validation endpoint
-  app.post("/api/validate-url", async (req, res) => {
+  app.post("/api/validate-url", async (req: Request, res: Response) => {
     try {
       const { url } = youtubeUrlSchema.parse(req.body);
       
@@ -206,7 +268,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: "Valid YouTube URL format"
       });
 
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
           valid: false,
