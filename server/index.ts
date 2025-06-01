@@ -2,10 +2,34 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import express, { type Request, Response, NextFunction } from "express";
+import cors from 'cors';
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
+
+// CORS Configuration
+const allowedOrigins = [
+  'http://localhost:5173', // Vite dev server
+  'https://yt-indir.pages.dev', // Generic Cloudflare Pages URL
+  // Add your specific Cloudflare Pages URL if it has a unique project prefix, e.g.:
+  // 'https://your-specific-project-name.pages.dev' 
+];
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true // Important for cookies, authorization headers, etc.
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
