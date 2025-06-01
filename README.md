@@ -6,7 +6,7 @@ YT-Indir is a web application designed to help you download your favorite YouTub
 
 ## ✨ Key Features
 
-*   **Modern UI**: Clean and responsive glassmorphism design with dark mode support.
+*   **Modern UI**: Clean and responsive glassmorphism design.
 *   **Video Preview**: View video title, thumbnail, duration, and view count before downloading (via YouTube Data API).
 *   **Quality Selection**: Choose from available video qualities (e.g., 360p, 480p, 720p, 1080p).
 *   **Real-time URL Validation**: Instant feedback on YouTube URL input.
