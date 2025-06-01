@@ -93,47 +93,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Simulate file download endpoint
-  app.get("/api/download/file", (req, res) => {
-    // In a real implementation, this would stream the actual video file
+  // Generic download endpoint
+  app.get("/api/file/download", (req, res) => {
     const filename = "youtube_video.mp4";
-    const content = "Mock video file content - in production this would be the actual video stream";
+    
+    // Create a simple mock MP4-like content
+    const mockMP4Header = Buffer.from([
+      0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, // MP4 signature
+      0x69, 0x73, 0x6F, 0x6D, 0x00, 0x00, 0x02, 0x00,
+      0x69, 0x73, 0x6F, 0x6D, 0x69, 0x73, 0x6F, 0x32,
+      0x6D, 0x70, 0x34, 0x31, 0x00, 0x00, 0x00, 0x08
+    ]);
+    
+    const content = "Mock YouTube video content - this would be the actual video stream in production.\n";
+    const fullContent = Buffer.concat([mockMP4Header, Buffer.from(content)]);
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Length', Buffer.byteLength(content));
+    res.setHeader('Content-Length', fullContent.length);
+    res.setHeader('Cache-Control', 'no-cache');
     
-    res.send(content);
-  });
-
-  // Download file by ID endpoint  
-  app.get("/api/download/file/:id", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid download ID" });
-      }
-
-      const download = await storage.getDownload(id);
-      if (!download) {
-        return res.status(404).json({ message: "Download not found" });
-      }
-
-      if (download.status !== "completed") {
-        return res.status(400).json({ message: "Download not ready" });
-      }
-
-      const filename = download.filename || "youtube_video.mp4";
-      const content = `Mock video file content for ${download.url} in ${download.quality} quality`;
-      
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Content-Type', 'video/mp4');
-      res.setHeader('Content-Length', Buffer.byteLength(content));
-      
-      res.send(content);
-    } catch (error) {
-      res.status(500).json({ message: "Internal server error" });
-    }
+    res.send(fullContent);
   });
 
   // Video info endpoint

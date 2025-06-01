@@ -72,9 +72,9 @@ export function useDownload() {
       description: "Your video is ready for download!",
     });
 
-    // Simulate file download
+    // Trigger file download
     const link = document.createElement('a');
-    link.href = '/api/download/file';
+    link.href = '/api/file/download';
     link.download = 'youtube_video.mp4';
     link.target = '_blank';
     document.body.appendChild(link);
