@@ -4,6 +4,31 @@ import { storage } from "./storage";
 import { insertDownloadSchema, youtubeUrlSchema, qualitySchema } from "@shared/schema";
 import { z } from "zod";
 
+// Helper function to parse ISO 8601 duration
+function parseDuration(duration: string): string {
+  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return "0:00";
+  
+  const hours = parseInt(match[1] || "0");
+  const minutes = parseInt(match[2] || "0");
+  const seconds = parseInt(match[3] || "0");
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+// Helper function to format view count
+function formatViewCount(views: number): string {
+  if (views >= 1000000) {
+    return `${(views / 1000000).toFixed(1)}M views`;
+  } else if (views >= 1000) {
+    return `${(views / 1000).toFixed(1)}K views`;
+  }
+  return `${views} views`;
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // YouTube download endpoint
   app.post("/api/download", async (req, res) => {
@@ -81,23 +106,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.send(content);
   });
 
+  // Download file by ID endpoint  
+  app.get("/api/download/file/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid download ID" });
+      }
+
+      const download = await storage.getDownload(id);
+      if (!download) {
+        return res.status(404).json({ message: "Download not found" });
+      }
+
+      if (download.status !== "completed") {
+        return res.status(400).json({ message: "Download not ready" });
+      }
+
+      const filename = download.filename || "youtube_video.mp4";
+      const content = `Mock video file content for ${download.url} in ${download.quality} quality`;
+      
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Length', Buffer.byteLength(content));
+      
+      res.send(content);
+    } catch (error) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Video info endpoint
+  app.get("/api/video-info", async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url) {
+        return res.status(400).json({ message: "URL parameter required" });
+      }
+
+      // Validate URL format
+      youtubeUrlSchema.parse({ url });
+      
+      // Extract video ID from URL
+      const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/);
+      if (!videoIdMatch) {
+        return res.status(400).json({ message: "Could not extract video ID from URL" });
+      }
+      
+      const videoId = videoIdMatch[1];
+      const apiKey = process.env.YOUTUBE_API_KEY;
+      
+      if (!apiKey) {
+        return res.status(500).json({ message: "YouTube API key not configured" });
+      }
+
+      // Fetch video data from YouTube API
+      const response = await fetch(
+        `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${videoId}&key=${apiKey}`
+      );
+
+      if (!response.ok) {
+        return res.status(response.status).json({ message: "Failed to fetch video data from YouTube" });
+      }
+
+      const data = await response.json();
+      
+      if (!data.items || data.items.length === 0) {
+        return res.status(404).json({ message: "Video not found or is private" });
+      }
+
+      const video = data.items[0];
+      const snippet = video.snippet;
+      const contentDetails = video.contentDetails;
+      const statistics = video.statistics;
+
+      // Parse duration from ISO 8601 format
+      const duration = contentDetails.duration;
+      const parsedDuration = parseDuration(duration);
+
+      // Format view count
+      const viewCount = statistics.viewCount ? formatViewCount(parseInt(statistics.viewCount)) : undefined;
+
+      // Format upload date
+      const uploadDate = new Date(snippet.publishedAt).toLocaleDateString();
+
+      const videoInfo = {
+        title: snippet.title,
+        duration: parsedDuration,
+        thumbnail: snippet.thumbnails.maxres?.url || snippet.thumbnails.high?.url || snippet.thumbnails.medium?.url,
+        viewCount,
+        uploadDate,
+        availableQualities: ["360p", "480p", "720p", "1080p"], // This would need yt-dlp to get actual formats
+        isAgeRestricted: contentDetails.contentRating?.ytRating === "ytAgeRestricted"
+      };
+
+      res.json(videoInfo);
+
+    } catch (error) {
+      console.error("Video info error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: "Invalid YouTube URL format"
+        });
+      }
+
+      res.status(500).json({
+        message: "Failed to fetch video information"
+      });
+    }
+  });
+
   // URL validation endpoint
   app.post("/api/validate-url", async (req, res) => {
     try {
       const { url } = youtubeUrlSchema.parse(req.body);
       
-      // Mock video info - in production this would fetch from YouTube API
-      const mockVideoInfo = {
-        title: "Sample Video Title",
-        duration: "3:45",
-        thumbnail: "https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
-        availableQualities: ["360p", "480p", "720p", "1080p"],
-        isAgeRestricted: url.includes("dQw4w9WgXcQ") // Rick Roll as example
-      };
-
       res.json({
         valid: true,
-        videoInfo: mockVideoInfo
+        message: "Valid YouTube URL format"
       });
 
     } catch (error) {
