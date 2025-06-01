@@ -1,0 +1,72 @@
+**Lovable.dev Prompt for yt-indir.com MVP**
+
+**Context:**  
+Build a YouTube video downloader web app with React frontend, Cloudflare Workers backend, and zero infrastructure costs. Prioritize legal compliance warnings and transient data handling.
+
+**Tech Stack:**  
+- Frontend: React + Vite + Tailwind CSS  
+- Backend: Cloudflare Workers (Node.js)  
+- Processing: yt-dlp WASM + FFmpeg.wasm  
+- Hosting: Cloudflare Pages  
+
+**Core Features:**  
+1. URL validation component with regex pattern matching:  
+   - `/(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/`  
+   - Real-time error toast on invalid input  
+
+2. Adaptive stream selector:  
+   - Dynamic dropdown showing available resolutions (360p/720p/1080p)  
+   - Auto-fallback to lower quality on processing errors  
+
+3. Progress visualization system:  
+   - Animated progress bar using `@headlessui/react`  
+   - WebSocket-like updates via ReadableStream  
+
+4. Compliance safeguards:  
+   - Age gate modal for 18+ content  
+   - Transient memory storage (<60s retention)  
+
+**UI Requirements:**  
+- Centered glassmorphism card layout  
+- Single-input workflow: Paste → Select → Download  
+- Mobile-optimized touch targets  
+
+**Backend Implementation:**  
+// worker.js
+export default {
+async fetch(request) {
+const url = new URL(request.url).searchParams.get('url');
+if (!validateYouTubeUrl(url)) return new Response('Invalid URL', {status: 400});
+
+text
+const stream = await fetchYouTubeStream(url);
+return new Response(stream.body, {
+  headers: {
+    'Content-Disposition': `attachment; filename="video.mp4"`,
+    'Content-Type': 'video/mp4'
+  }
+});
+}
+}
+
+text
+
+**Error Handling:**  
+- Custom error classes (InvalidURLError, AgeRestrictedError)  
+- User-friendly recovery prompts with reduced-quality retry  
+
+**Data Policy:**  
+- No persistent storage  
+- Cloudflare DLP scanning enabled  
+
+**Deployment Pipeline:**  
+1. Connect GitHub repo  
+2. Auto-deploy via Cloudflare Pages  
+3. Set `compatibility_date` = "2024-06-01"  
+
+**Post-Launch:**  
+- Implement Cloudflare Rate Limiting  
+- Add hCaptcha for abuse prevention  
+
+**Prompt:**  
+"Initialize project with above specs. Start by creating the URL input component with paste detection and real-time validation. Use TanStack Query for managing download states. Implement the Worker stream handler with yt-dlp WASM integration. Add legal disclaimer modal that requires confirmation before first use."  
