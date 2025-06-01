@@ -5,6 +5,9 @@ import { insertDownloadSchema, youtubeUrlSchema, qualitySchema } from "@shared/s
 import { z } from "zod";
 import { YtDlp, type VideoInfo } from 'ytdlp-nodejs';
 import stream from 'stream';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
 
 // Helper function to parse ISO 8601 duration
 function parseDuration(duration: string): string {
@@ -33,6 +36,25 @@ function formatViewCount(views: number): string {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const ytdlp = new YtDlp();
+  const cookiesFilePath = path.join(os.tmpdir(), 'cookies.txt');
+
+  // Function to prepare cookies file if content is available
+  async function prepareCookies(): Promise<string | undefined> {
+    const cookiesContent = process.env.YOUTUBE_COOKIES_CONTENT;
+    if (cookiesContent && cookiesContent.trim() !== "") {
+      try {
+        await fs.writeFile(cookiesFilePath, cookiesContent);
+        console.log("YouTube cookies file prepared at:", cookiesFilePath);
+        return cookiesFilePath;
+      } catch (error) {
+        console.error("Failed to write temporary cookies file:", error);
+        return undefined;
+      }
+    } else {
+      console.log("YOUTUBE_COOKIES_CONTENT environment variable not set or empty. Proceeding without cookies.");
+      return undefined;
+    }
+  }
 
   // YouTube download endpoint
   app.get("/api/download", async (req: Request, res: Response) => {
@@ -53,7 +75,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`Attempting to download: ${url}`);
 
-      const videoInfoResponse = await ytdlp.getInfoAsync(url);
+      const activeCookiesFile = await prepareCookies();
+      const ytdlpOptions: Record<string, any> = {};
+      if (activeCookiesFile) {
+        ytdlpOptions.cookies = activeCookiesFile;
+      }
+
+      const videoInfoResponse = await ytdlp.getInfoAsync(url, ytdlpOptions);
 
       // Type guard for VideoInfo
       if (videoInfoResponse._type !== 'video') {
@@ -81,25 +109,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Prepare arguments for ytdlp.stream
-      // The 'quality' from user (e.g., "720p") needs to be translated into yt-dlp format selection.
-      // Example: -f "bestvideo[height<=?720][ext=mp4]+bestaudio[ext=m4a]/best[height<=?720][ext=mp4]"
-      // For now, let's try a simple approach, or let yt-dlp pick 'best'.
-      // We can enhance format selection later. A specific format string for yt-dlp:
       let formatString = `best[ext=mp4][height<=?${quality.replace('p','')}]/best[ext=webm][height<=?${quality.replace('p','')}]/best`;
       if (quality.toLowerCase() === 'best') {
           formatString = 'best';
       }
 
+      const streamOptions: Record<string, any> = {
+        format: formatString,
+      };
+      if (activeCookiesFile) {
+        streamOptions.cookies = activeCookiesFile;
+      }
 
-      console.log(`Requesting stream with format: ${formatString}`);
-      const ytdlpReadableStream = ytdlp.stream(url, {
-        format: formatString, 
-        // onProgress: (progress) => {
-        //   // This progress is from yt-dlp itself, not bytes transferred.
-        //   // For client-side progress, Content-Length and chunked streaming are more standard.
-        //   console.log('yt-dlp progress:', progress.percent, progress.totalSize);
-        // }
-      });
+      console.log(`Requesting stream with format: ${formatString} and options:`, streamOptions);
+      const ytdlpReadableStream = ytdlp.stream(url, streamOptions);
       
       if (ytdlpReadableStream && typeof ytdlpReadableStream.pipeAsync === 'function') {
         console.log(`Streaming video: ${filename} to client.`);
@@ -155,6 +178,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // We should ensure the stream is destroyed if it hasn't been.
         console.error("Error after headers sent, client response might be incomplete.");
         if (req.socket) req.socket.destroy(); // Forcefully close the connection
+      }
+    } finally {
+      // Clean up temporary cookies file if it was created
+      if (process.env.YOUTUBE_COOKIES_CONTENT && process.env.YOUTUBE_COOKIES_CONTENT.trim() !== "") {
+        try {
+          await fs.unlink(cookiesFilePath);
+          console.log("Temporary cookies file deleted.");
+        } catch (cleanupError) {
+          console.error("Failed to delete temporary cookies file:", cleanupError);
+        }
       }
     }
   });
