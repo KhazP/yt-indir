@@ -74,8 +74,9 @@ export function useDownload() {
 
     // Simulate file download
     const link = document.createElement('a');
-    link.href = '/api/download/file'; // This would be the actual file URL
+    link.href = '/api/download/file';
     link.download = 'youtube_video.mp4';
+    link.target = '_blank';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
