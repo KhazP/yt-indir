@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import URLInput from "./url-input";
+import VideoPreview from "./video-preview";
 import QualitySelector from "./quality-selector";
 import DownloadSection from "./download-section";
 import { useDownload } from "@/hooks/use-download";
@@ -73,10 +74,15 @@ export default function DownloadCard({ onAgeGateRequired, isDisclaimerAccepted }
         isValid={isValidUrl}
       />
 
+      <VideoPreview
+        url={url}
+        isValid={isValidUrl === true}
+      />
+
       <QualitySelector
         value={quality}
         onChange={setQuality}
-        disabled={!isValidUrl}
+        disabled={isValidUrl !== true}
       />
 
       <DownloadSection
@@ -85,7 +91,7 @@ export default function DownloadCard({ onAgeGateRequired, isDisclaimerAccepted }
         isProcessing={isProcessing}
         progress={progress}
         currentStep={currentStep}
-        canDownload={isValidUrl && !!quality && !isProcessing}
+        canDownload={isValidUrl === true && !!quality && !isProcessing}
       />
     </Card>
   );
